@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stock-portfolio-app
+  labels:
+    app: stock-portfolio
+    component: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: app
+  template:
+    metadata:
+      labels:
+        app: stock-portfolio
+        component: app
+    spec:
+      containers:
+        - name: stock-portfolio-app
+          image: cloudbasedportfolioapplication-app:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: portfolio-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: portfolio-secret
+                  key: DB_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /api/stocks
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /api/stocks
+              port: 8080
+            initialDelaySeconds: 40
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stock-portfolio-service
+  labels:
+    app: stock-portfolio
+    component: app
+spec:
+  type: LoadBalancer
+  selector:
+    component: app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
