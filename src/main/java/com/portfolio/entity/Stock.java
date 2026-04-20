@@ -1,16 +1,23 @@
 package com.portfolio.entity;
 
-import jakarta.persistence.*;
 import java.math.BigDecimal;
 
-@Entity
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
+@Entity //SpringBoot already knows how to handle this
 @Table(name = "stocks")
 public class Stock {
-
-    @Id
+    // those are the fields of Mysql database table
+    @Id // the primary key: number that identify each row in the table 
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    //nullable = false means this field is required. You can't add a stock without a symbol. If you try, the database will reject it.
     @Column(nullable = false, length = 10)
     private String symbol;
 

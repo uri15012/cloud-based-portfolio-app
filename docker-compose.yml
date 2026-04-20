@@ -1,13 +1,15 @@
 services:
+#this file runs my app and SQL together 
   db:
-    image: mysql:8.3
+    image: mysql:8.3 #download the MYSQL 8.3 image from Docker Hub
     restart: always
     environment:
       MYSQL_ROOT_PASSWORD: secret
       MYSQL_DATABASE: portfolio
     ports:
       - "3306:3306"
-    volumes:
+    #saves the data base permanently on my mac so when we restart Docker your stocks are still there.
+    volumes: 
       - mysql_data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-usecret", "-psecret"]
@@ -16,7 +18,9 @@ services:
       retries: 5
 
   app:
+    #build the image using a Dockerfile
     build: .
+    #connect port 8080 on your mac to port 8080 inside the container
     ports:
       - "8080:8080"
     environment:

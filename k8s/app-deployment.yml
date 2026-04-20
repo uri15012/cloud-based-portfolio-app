@@ -1,4 +1,5 @@
 apiVersion: apps/v1
+#tells how to run my app, it tells kubernetes how to run container 
 kind: Deployment
 metadata:
   name: stock-portfolio-app
@@ -6,7 +7,7 @@ metadata:
     app: stock-portfolio
     component: app
 spec:
-  replicas: 1
+  replicas: 1 #Kubernetes runs 1 copy of your app container, we set 1 because it's a demo project
   selector:
     matchLabels:
       component: app
@@ -19,7 +20,7 @@ spec:
       containers:
         - name: stock-portfolio-app
           image: cloudbasedportfolioapplication-app:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: IfNotPresent #use local docker image, don't pull from internet 
           ports:
             - containerPort: 8080
           envFrom:
@@ -31,14 +32,19 @@ spec:
                 secretKeyRef:
                   name: portfolio-secret
                   key: DB_PASSWORD
+   
+
+          #every 10 seconds Kubernetes checks if the app is responding 
           readinessProbe:
-            httpGet:
+            httpGet: #send a GET request 
               path: /api/stocks
               port: 8080
             initialDelaySeconds: 20
-            periodSeconds: 10
-            timeoutSeconds: 3
-            failureThreshold: 5
+            periodSeconds: 10 #every 10 second the GET request is sent
+            timeoutSeconds: 3 #if no response in 3 seconds counts as failure
+            failureThreshold: 5 #after 5 failures in a row -> restart the container 
+
+          #if liveness probe fails 3 times → Kubernetes kills and restarts the container automatically (self-healing)
           livenessProbe:
             httpGet:
               path: /api/stocks
@@ -46,6 +52,8 @@ spec:
             initialDelaySeconds: 40
             periodSeconds: 20
             timeoutSeconds: 3
+
+          #checks how much CPU and memory each container gets.
           resources:
             requests:
               cpu: 250m
@@ -63,10 +71,12 @@ metadata:
     app: stock-portfolio
     component: app
 spec:
+  #Service = how to access the app from outside
+  #LoadBalancer distributes traffic across all replicas
   type: LoadBalancer
   selector:
     component: app
   ports:
     - name: http
-      port: 80
-      targetPort: 8080
+      port: 80 #outside world hits 80
+      targetPort: 8080 #forwards to port 8080 inside the container 

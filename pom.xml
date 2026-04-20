@@ -21,10 +21,10 @@
         <java.version>17</java.version>
     </properties>
 
-    <dependencies>
+    <dependencies> <!-- what matters most-->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <groupId>org.springframework.boot</groupId> <!-- who made it -->
+            <artifactId>spring-boot-starter-web</artifactId> <!-- the library name -->
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

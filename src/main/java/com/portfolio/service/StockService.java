@@ -1,13 +1,15 @@
 package com.portfolio.service;
 
-import com.portfolio.entity.Stock;
-import com.portfolio.repository.StockRepository;
+import java.util.List;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.List;
+import com.portfolio.entity.Stock;
+import com.portfolio.repository.StockRepository;
 
+//update, find a stock 
 @Service
 public class StockService {
 
@@ -16,7 +18,8 @@ public class StockService {
     public StockService(StockRepository repository) {
         this.repository = repository;
     }
-
+    
+    // in case we want to see all the stocks 
     public List<Stock> findAll() {
         return repository.findAll();
     }
