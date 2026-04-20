@@ -1,6 +1,6 @@
 # Stock Portfolio API
 
-A production-ready RESTful API for managing a personal stock portfolio, built with **Spring Boot 3**, **MySQL 8**, and deployed via **Docker** and **Kubernetes**. The project includes a full **CI/CD pipeline** powered by GitHub Actions with automated pytest integration tests on every push to `main`.
+A production-ready RESTful API for managing a personal stock portfolio, built with **Spring Boot 3**, **MySQL 8**, and deployed via **Docker**, **Kubernetes**, and **AWS ECS Fargate**. The project includes a full **CI/CD pipeline** powered by GitHub Actions that runs automated pytest integration tests, pushes a Docker image to Amazon ECR, and redeploys the ECS service on every push to `main`.
 
 ---
 
@@ -12,6 +12,7 @@ A production-ready RESTful API for managing a personal stock portfolio, built wi
 - [API Endpoints](#api-endpoints)
 - [Running with Docker Compose](#running-with-docker-compose)
 - [Deploying to Kubernetes](#deploying-to-kubernetes)
+- [Deploying to AWS (ECS Fargate)](#deploying-to-aws-ecs-fargate)
 - [CI/CD Pipeline](#cicd-pipeline)
 - [Integration Tests](#integration-tests)
 
@@ -28,6 +29,7 @@ A production-ready RESTful API for managing a personal stock portfolio, built wi
 | Build Tool | Maven 3.9 |
 | Containerisation | Docker (multi-stage build) |
 | Orchestration | Kubernetes (Deployment, Service, HPA, PVC) |
+| Cloud | AWS ECS Fargate + Amazon ECR |
 | CI/CD | GitHub Actions |
 | Integration Tests | Python 3.12 + pytest + requests |
 
@@ -159,14 +161,25 @@ stock-portfolio/
                      │ needs (on success only)
                      ▼
   ┌─────────────────────────────────────────┐
-  │  Job 2: docker-build                    │
+  │  Job 2: deploy                          │
   │                                         │
   │  1. Checkout code                       │
-  │  2. Setup Docker Buildx                 │
-  │  3. docker build  (GHA layer cache)     │
-  │     → cloudbasedportfolioapplication-   │
-  │       app:latest                        │
+  │  2. Configure AWS credentials           │
+  │  3. Log in to Amazon ECR                │
+  │  4. docker build --platform linux/amd64 │
+  │     → ECR/cloud-portfolio-app:latest    │
+  │     → ECR/cloud-portfolio-app:<sha>     │
+  │     (GHA layer cache)                   │
+  │  5. Render new task definition revision │
+  │     (swap app image → :<sha>)           │
+  │  6. Register task def + force-deploy    │
+  │     ECS service                         │
+  │  7. Wait for service stability          │
   └─────────────────────────────────────────┘
+                     │
+                     ▼
+          ECS Fargate task replaced
+          http://13.53.131.214:8080
 ```
 
 ---
@@ -317,6 +330,102 @@ kubectl delete -f k8s/
 
 ---
 
+## Deploying to AWS (ECS Fargate)
+
+### Live deployment
+
+| Resource | Value |
+|---|---|
+| Live app URL | **http://13.53.131.214:8080/api/stocks** |
+| ECR repository | `336779059487.dkr.ecr.eu-north-1.amazonaws.com/cloud-portfolio-app` |
+| ECS cluster | `cloud-portfolio-cluster` |
+| ECS service | `cloud-portfolio-service` |
+| Region | `eu-north-1` (Stockholm) |
+
+### Architecture
+
+The app runs as a **single Fargate task** containing two containers that share the same network namespace (identical to how Docker Compose links `app` and `db` via `localhost`):
+
+```
+  Internet
+      │
+      │  HTTP :8080
+      ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  AWS ECS Fargate Task  (512 CPU / 1024 MB)                  │
+  │                                                             │
+  │  ┌──────────────────────────┐                               │
+  │  │  app container           │  ◀── public IP (port 8080)   │
+  │  │  Spring Boot :8080       │                               │
+  │  │  image: ECR/cloud-       │                               │
+  │  │    portfolio-app:latest  │                               │
+  │  └────────────┬─────────────┘                               │
+  │               │ JDBC → localhost:3306                        │
+  │  ┌────────────▼─────────────┐                               │
+  │  │  mysql container         │                               │
+  │  │  MySQL 8.3 :3306         │                               │
+  │  │  image: mysql:8.3        │                               │
+  │  └──────────────────────────┘                               │
+  │                                                             │
+  │  Both containers log to CloudWatch: /ecs/cloud-portfolio-app│
+  └─────────────────────────────────────────────────────────────┘
+        │
+        ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  AWS Infrastructure                                         │
+  │                                                             │
+  │  VPC (default)  →  public subnet  →  Security Group        │
+  │                                      (TCP 8080 open)        │
+  │                                                             │
+  │  ECR  →  stores versioned Docker images (:latest + :SHA)   │
+  │  CloudWatch Logs  →  /ecs/cloud-portfolio-app              │
+  │  IAM  →  ecsTaskExecutionRole (ECR pull + CW logs)         │
+  └─────────────────────────────────────────────────────────────┘
+```
+
+**Key design decisions:**
+
+- **MySQL sidecar** — runs alongside the app in the same task so the app connects via `localhost:3306`, matching the docker-compose setup with no code changes. For a production workload, replacing this with Amazon RDS would give persistent storage across task restarts.
+- **Public IP on the task** — sufficient for a portfolio app. A production setup would sit behind an Application Load Balancer for a stable DNS name and HTTPS termination.
+- **awsvpc networking** — each task gets its own elastic network interface, so security group rules apply at the task level rather than the EC2 instance level.
+
+### Re-deploying manually
+
+```bash
+# Build and push a new image
+aws ecr get-login-password --region eu-north-1 | \
+  docker login --username AWS --password-stdin \
+  336779059487.dkr.ecr.eu-north-1.amazonaws.com
+
+docker build --platform linux/amd64 \
+  -t 336779059487.dkr.ecr.eu-north-1.amazonaws.com/cloud-portfolio-app:latest .
+
+docker push 336779059487.dkr.ecr.eu-north-1.amazonaws.com/cloud-portfolio-app:latest
+
+# Force a new deployment
+aws ecs update-service \
+  --cluster cloud-portfolio-cluster \
+  --service cloud-portfolio-service \
+  --force-new-deployment \
+  --region eu-north-1
+```
+
+### Checking service health
+
+```bash
+# Service status
+aws ecs describe-services \
+  --cluster cloud-portfolio-cluster \
+  --services cloud-portfolio-service \
+  --region eu-north-1 \
+  --query 'services[0].{status:status,running:runningCount,desired:desiredCount}'
+
+# Live endpoint
+curl http://13.53.131.214:8080/api/stocks
+```
+
+---
+
 ## CI/CD Pipeline
 
 The pipeline is defined in `.github/workflows/ci.yml` and triggers on every push to `main`.
@@ -333,14 +442,23 @@ The pipeline is defined in `.github/workflows/ci.yml` and triggers on every push
 | Python 3.12 setup | pip dependency cache enabled |
 | pytest | 16 integration tests run against the live API with `-v --tb=short` |
 
-### Job 2 — Docker Build *(runs only if Job 1 passes)*
+### Job 2 — Build, Push & Deploy to ECS *(runs only if Job 1 passes)*
 
 | Step | Detail |
 |---|---|
-| Docker Buildx | Multi-platform builder setup |
-| Image build | Full multi-stage Dockerfile build; GitHub Actions layer cache (`type=gha`) keeps repeat builds fast |
+| AWS credentials | Configured via `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` repository secrets |
+| ECR login | `aws-actions/amazon-ecr-login` — exchanges the IAM credentials for a short-lived Docker registry token |
+| Docker Buildx | Multi-platform builder (`linux/amd64`) setup |
+| Image build + push | Full multi-stage Dockerfile build; image pushed to ECR tagged as both `:latest` and `:<git-sha>`; GitHub Actions layer cache (`type=gha`) keeps repeat builds fast |
+| Task definition update | Downloads the current `cloud-portfolio-task` definition and renders a new revision with the `:<git-sha>` image via `aws-actions/amazon-ecs-render-task-definition` |
+| ECS deploy | Registers the new task definition revision and triggers a rolling replacement of the running task via `aws-actions/amazon-ecs-deploy-task-definition`; the job waits for service stability before completing |
 
-> The Docker image is **not pushed** to a registry in this pipeline. To enable that, add `docker/login-action` and set `push: true` in the `build-push-action` step.
+**Required repository secrets:**
+
+| Secret | Description |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | IAM access key with ECR push + ECS deploy permissions |
+| `AWS_SECRET_ACCESS_KEY` | Corresponding IAM secret key |
 
 ---
 
